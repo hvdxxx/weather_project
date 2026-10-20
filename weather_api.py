@@ -31,3 +31,22 @@ def take_weather():
         "humidity": hum,
         "wind": wind,
     }
+
+def fetch_forecast():
+    """Запрашивает прогноз у MET Norway и возвращает список точек (время, температура)."""
+    params = {"lat": LATI, "lon": LONG}
+    headers = {"User-Agent": USER_AGENT}
+    try:
+        r = requests.get(URL, params=params, headers=headers, timeout=TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+    except requests.exceptions.RequestException:
+        return []
+
+    forecast_points = []
+    # Проходим по всему временному ряду, а не только по первой точке
+    for entry in data["properties"]["timeseries"]:
+        time_str = entry["time"]
+        temp = entry["data"]["instant"]["details"]["air_temperature"]
+        forecast_points.append({"time": time_str, "temp": temp})
+    return forecast_points

@@ -1,8 +1,8 @@
 import time
 from datetime import datetime
 
-from weather_api import take_weather
-from weather_storage import save_weather, load_weather
+from weather_api import take_weather, fetch_forecast
+from weather_storage import save_weather, load_weather, save_forecast_if_needed, load_forecast
 from weather_calc import calculate_stats, format_stats
 from plotter import plot_temperature
 from weather_api_config import CITY, INTERVAL_MIN, PLOT_EVERY
@@ -10,6 +10,14 @@ from weather_api_config import CITY, INTERVAL_MIN, PLOT_EVERY
 def main():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Запуск сбора данных для {CITY}.")
     print(f"Интервал: {INTERVAL_MIN} мин. Остановка: Ctrl+C.\n")
+
+    print("Проверка прогноза на сегодня...")
+    forecast_points = fetch_forecast()
+    if forecast_points:
+        save_forecast_if_needed(forecast_points)
+        print(f"Прогноз получен и сохранен ({len(forecast_points)} точек).")
+    else:
+        print("Не удалось получить прогноз. Будет использован старый (если есть).")
 
     try:
         while True:
@@ -24,10 +32,10 @@ def main():
 
             # 2. Читаем всё накопленное
             records = load_weather()
+            forecast = load_forecast()
 
-            # 3. Обновляем график (например, каждые N записей или каждый раз)
-            if len(records) > 0:
-                plot_temperature(records, filename="temperature.png")
+            if records or forecast:
+                plot_temperature(records, forecast=forecast)
 
             # 4. Выводим статистику (можно выводить не каждый раз, чтобы не спамить)
             if len(records) % PLOT_EVERY == 0:

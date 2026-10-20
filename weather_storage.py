@@ -4,6 +4,7 @@ from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_FILE = os.path.join(BASE_DIR, "weather_history.csv")
+FORECAST_FILE = os.path.join(BASE_DIR, "forecast.csv")
 HEADERS = ["timestamp", "city", "temp", "humidity", "wind"]
 
 
@@ -50,3 +51,31 @@ def load_weather():
                 continue
 
     return records
+
+def save_forecast_if_needed(forecast_points):
+    """Сохраняет прогноз в CSV, только если файл за сегодня еще не создан."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    # Проверяем, есть ли уже файл с прогнозом за сегодня
+    if os.path.isfile(FORECAST_FILE):
+        with open(FORECAST_FILE, "r", encoding="utf-8") as f:
+            first_line = f.readline()
+            if today in first_line:
+                return  # Прогноз на сегодня уже сохранен, выходим
+
+    # Если файла нет или он за прошлый день — перезаписываем
+    with open(FORECAST_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "temp"])
+        for point in forecast_points:
+            writer.writerow([point["time"], point["temp"]])
+
+def load_forecast():
+    """Читает сохраненный прогноз из CSV."""
+    if not os.path.isfile(FORECAST_FILE):
+        return []
+    points = []
+    with open(FORECAST_FILE, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            points.append({"time": row["timestamp"], "temp": float(row["temp"])})
+    return points
