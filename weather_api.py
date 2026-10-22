@@ -44,9 +44,17 @@ def fetch_forecast():
         return []
 
     forecast_points = []
-    # Проходим по всему временному ряду, а не только по первой точке
     for entry in data["properties"]["timeseries"]:
         time_str = entry["time"]
         temp = entry["data"]["instant"]["details"]["air_temperature"]
-        forecast_points.append({"time": time_str, "temp": temp})
+        
+        # Достаем код погоды (что там: снег, дождь или ясно)
+        next_1h = entry["data"].get("next_1_hours", {})
+        symbol = next_1h.get("summary", {}).get("symbol_code", "")
+        
+        forecast_points.append({
+            "time": time_str, 
+            "temp": temp,
+            "symbol": symbol  # <--- ДОБАВИЛИ КОД ПОГОДЫ
+        })
     return forecast_points

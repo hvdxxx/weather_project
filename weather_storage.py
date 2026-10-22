@@ -65,17 +65,25 @@ def save_forecast_if_needed(forecast_points):
     # Если файла нет или он за прошлый день — перезаписываем
     with open(FORECAST_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["timestamp", "temp"])
+        writer.writerow(["timestamp", "temp", "symbol"])
         for point in forecast_points:
+            # 2. Записываем symbol (используем .get, на случай если API не отдал код)
+            symbol = point.get("symbol", "")
             writer.writerow([point["time"], point["temp"]])
 
 def load_forecast():
     """Читает сохраненный прогноз из CSV."""
     if not os.path.isfile(FORECAST_FILE):
         return []
+    
     points = []
     with open(FORECAST_FILE, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            points.append({"time": row["timestamp"], "temp": float(row["temp"])})
+            points.append({
+                "time": row["timestamp"], 
+                "temp": float(row["temp"]),
+                # 3. Читаем symbol. Если колонки нет (старый файл), вернется пустая строка
+                "symbol": row.get("symbol", "") 
+            })
     return points

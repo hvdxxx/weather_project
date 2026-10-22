@@ -34,8 +34,22 @@ def plot_temperature(records, forecast=None, filename="temperature.png"):
     if forecast:
         f_times = [datetime.fromisoformat(p["time"]).astimezone().replace(tzinfo=None) for p in forecast]
         f_temps = [p["temp"] for p in forecast]
-        all_dates.extend(f_times)
         ax.plot(f_times, f_temps, linestyle="--", linewidth=2, color="#d62728", label="Прогноз MET Norway")
+        
+        # --- ИЩЕМ СНЕГ В ПРОГНОЗЕ ---
+        snow_times = []
+        snow_temps = []
+        for p in forecast:
+            # Безопасно достаем символ: если там None, заменяем на пустую строку
+            symbol = p.get("symbol") or "" 
+            
+            if "snow" in symbol: 
+                snow_times.append(datetime.fromisoformat(p["time"]).astimezone().replace(tzinfo=None))
+                snow_temps.append(p["temp"])
+
+        # Рисуем снежинки поверх красной линии
+        if snow_times:
+            ax.scatter(snow_times, snow_temps, marker="*", color="blue", s=100, zorder=5, label="Ожидается снег")
 
     # --- ЗАКРАШИВАЕМ НОЧИ ---
     if all_dates:
