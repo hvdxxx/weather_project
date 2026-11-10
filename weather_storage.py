@@ -23,11 +23,8 @@ CSV_FILE = os.path.join(BASE_DIR, "weather_history.csv")
 HEADERS = ["timestamp", "city", "temp", "humidity", "wind"]
 
 
-def save_weather(city, weather):
-    """Добавляет одну запись о погоде в CSV и SQLite."""
-    if weather is None:
-        return
-
+def _append_weather_csv(city, weather) -> None:
+    """Добавляет строку в совместимый CSV, не перезаписывая историю."""
     file_exists = os.path.isfile(CSV_FILE)
 
     with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
@@ -46,7 +43,20 @@ def save_weather(city, weather):
             ]
         )
 
-    _save_observation_to_db(city, weather)
+
+def save_weather(city, weather):
+    """Пишет наблюдение в SQLite (основное) и CSV (совместимость)."""
+    if weather is None:
+        return
+
+    db_saved = _save_observation_to_db(city, weather)
+
+    try:
+        _append_weather_csv(city, weather)
+    except (OSError, csv.Error) as exc:
+        logger.exception("Не удалось сохранить наблюдение в CSV: %s", exc)
+        if not db_saved:
+            logger.error("Наблюдение не сохранено ни в SQLite, ни в CSV")
 
 
 def load_weather():
@@ -90,7 +100,7 @@ def _local_to_utc(timestamp: str) -> str:
     return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
-def _save_observation_to_db(city, weather) -> None:
+def _save_observation_to_db(city, weather) -> bool:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
         weather_db.init_db()
@@ -105,8 +115,10 @@ def _save_observation_to_db(city, weather) -> None:
             fetched_at_utc=now,
         )
     except (sqlite3.Error, OSError) as exc:
-        # CSV уже сохранён, поэтому сбор данных не прерываем, но ошибку не скрываем.
+        # Ошибку не скрываем; CSV будет записан как резервный формат.
         logger.exception("Не удалось сохранить наблюдение в SQLite: %s", exc)
+        return False
+    return True
 
 
 def migrate_csv_to_db() -> int:

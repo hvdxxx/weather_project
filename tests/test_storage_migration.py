@@ -88,3 +88,33 @@ def test_save_weather_survives_sqlite_failure(storage, monkeypatch):
 
     assert "Yakutsk,-5.0,80.0,2.0" in storage.read_text(encoding="utf-8")
     assert weather_db.load_observations() == []
+
+
+def test_save_weather_keeps_sqlite_when_csv_fails(storage, monkeypatch):
+    def fail(_city, _weather):
+        raise OSError("csv is read-only")
+
+    monkeypatch.setattr(weather_storage, "_append_weather_csv", fail)
+
+    weather_storage.save_weather("Yakutsk", {"temp": -5.0, "humidity": 80.0, "wind": 2.0})
+
+    rows = weather_db.load_observations()
+    assert len(rows) == 1
+    assert rows[0]["temperature"] == pytest.approx(-5.0)
+    assert not storage.exists()
+
+
+def test_migration_failure_does_not_mark_complete(storage, monkeypatch):
+    storage.write_text(CSV_TEXT, encoding="utf-8")
+
+    def fail(_rows):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(weather_db, "insert_observations", fail)
+
+    with pytest.raises(sqlite3.OperationalError):
+        weather_storage.migrate_csv_to_db()
+
+    assert weather_db.get_meta("csv_migrated") is None
+    assert weather_db.load_observations() == []
+    assert storage.read_text(encoding="utf-8") == CSV_TEXT

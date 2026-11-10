@@ -80,49 +80,53 @@ def current_weather():
 
 @app.get("/weather/forecast", response_model=ForecastResponse)
 def forecast():
-    rows = weather_service.get_forecast_rows()
-    if not rows:
+    data = weather_service.get_forecast_data()
+    if not data["rows"]:
         raise HTTPException(
             status_code=503,
-            detail="Прогноз недоступен: данные ещё не собраны или устарели",
+            detail="Прогноз недоступен: данные ещё не собраны",
         )
     return ForecastResponse(
         generated_at_utc=_utc_now(),
         city=config.CITY,
-        rows=rows,
+        rows=data["rows"],
+        stale=data["stale"],
+        sources=data["sources"],
     )
 
 
 @app.get("/weather/forecast/sources", response_model=SourcesResponse)
 def forecast_sources():
-    data = weather_service.get_sources()
-    if all(source["status"] == "unavailable" for source in data["sources"].values()):
-        raise HTTPException(status_code=503, detail="Нет сохранённых прогнозов источников")
-    return data
+    return weather_service.get_sources()
 
 
 @app.get("/weather/forecast/combined", response_model=CombinedResponse)
 def forecast_combined():
-    rows = weather_service.get_combined_rows()
-    if not rows:
+    data = weather_service.get_combined_data()
+    if not data["rows"]:
         raise HTTPException(status_code=503, detail="Объединённый прогноз пока недоступен")
     return CombinedResponse(
         generated_at_utc=_utc_now(),
         city=config.CITY,
-        rows=rows,
+        rows=data["rows"],
+        stale=data["stale"],
+        snapshot_generated_at_utc=data["generated_at_utc"],
+        sources=data["sources"],
     )
 
 
 @app.get("/weather/forecast/differences", response_model=DifferencesResponse)
 def forecast_differences():
-    rows = weather_service.get_differences_rows()
-    if rows is None:
+    data = weather_service.get_differences_data()
+    if not data["available"]:
         raise HTTPException(status_code=503, detail="Нет прогнозов для сравнения")
     return DifferencesResponse(
         generated_at_utc=_utc_now(),
         city=config.CITY,
-        intervals=len(rows),
-        rows=rows,
+        intervals=len(data["rows"]),
+        rows=data["rows"],
+        stale=data["stale"],
+        sources=data["sources"],
     )
 
 

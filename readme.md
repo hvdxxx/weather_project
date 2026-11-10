@@ -75,6 +75,7 @@ API не ходит в сеть на каждый запрос: он читае�
 | `WEATHER_PLOT_EVERY` | `5` | как часто печатать статистику |
 | `WEATHER_TIMEOUT_SEC` | `15` | timeout чтения HTTP |
 | `WEATHER_CURRENT_MAX_AGE_HOURS` | `6` | после этого `/weather/current` отдаёт 404 |
+| `WEATHER_FORECAST_MAX_AGE_HOURS` | `3` | после этого прогноз источника помечается `stale` |
 | `WEATHER_DB_PATH` | `data/weather.db` | путь к SQLite |
 | `WEATHER_PLOTS_DIR` | `data/plots` | каталог графиков прогноза |
 
@@ -84,10 +85,10 @@ API не ходит в сеть на каждый запрос: он читае�
 |---|---|---|
 | `GET /health` | состояние приложения и SQLite | 503 |
 | `GET /weather/current` | последнее свежее наблюдение | 404 |
-| `GET /weather/forecast` | строки MET / Open-Meteo / combined / diff | 503 |
-| `GET /weather/forecast/sources` | последние снимки каждого источника | 503 |
-| `GET /weather/forecast/combined` | сохранённый объединённый прогноз | 503 |
-| `GET /weather/forecast/differences` | расхождения (Open-Meteo − MET Norway) | 503 |
+| `GET /weather/forecast` | строки MET / Open-Meteo / combined / diff + статусы и `stale` | 503 |
+| `GET /weather/forecast/sources` | статусы и последние снимки источников (всегда 200) | — |
+| `GET /weather/forecast/combined` | сохранённый объединённый прогноз + `stale` | 503 |
+| `GET /weather/forecast/differences` | расхождения (Open-Meteo − MET Norway) + `stale` | 503 |
 | `GET /weather/history?limit=100&since=...` | история наблюдений из SQLite | 422 |
 | `GET /weather/statistics` | статистика наблюдений и сравнение прогнозов | — |
 
@@ -103,6 +104,22 @@ curl "http://127.0.0.1:8000/weather/history?limit=10"
 MET переводится приблизительной таблицей (исходный код сохраняется в
 `weather_symbol`). Коды погоды не усредняются: при расхождении combined-код
 равен `null`, а оба исходных кода видны в строках источников.
+
+### Свежесть прогнозов
+
+Каждый источник получает статус:
+
+- `ok` — снимок свежий;
+- `stale` — снимок старше `WEATHER_FORECAST_MAX_AGE_HOURS`;
+- `error` — последняя попытка сбора завершилась ошибкой (последний снимок
+  сохраняется);
+- `unavailable` — снимков и попыток ещё не было.
+
+Устаревшие данные не удаляются: `/weather/forecast`, `/combined` и
+`/differences` возвращают их с `stale: true`, а в `sources` указаны возраст и
+ошибка. `503` остаётся только для случая, когда данных нет вообще.
+`/weather/forecast/sources` — диагностический endpoint, он возвращает `200`
+с любыми статусами.
 
 ## Данные и хранение
 

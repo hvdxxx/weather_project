@@ -85,12 +85,17 @@ class ForecastResponse(BaseModel):
     generated_at_utc: str
     city: str
     rows: list[ForecastRow]
+    stale: bool = False
+    sources: "SourceStatusPayload"
 
 
 class CombinedResponse(BaseModel):
     generated_at_utc: str
     city: str
     rows: list[CombinedPoint]
+    stale: bool = False
+    snapshot_generated_at_utc: str | None = None
+    sources: "SourceStatusPayload"
 
 
 class DifferenceRow(BaseModel):
@@ -104,19 +109,32 @@ class DifferencesResponse(BaseModel):
     city: str
     intervals: int
     rows: list[DifferenceRow]
+    stale: bool = False
+    sources: "SourceStatusPayload"
 
 
-class SourceInfo(BaseModel):
-    status: Literal["ok", "unavailable", "error"]
+class SourceStatusInfo(BaseModel):
+    status: Literal["ok", "stale", "unavailable", "error"]
     count: int = 0
     fetched_at_utc: str | None = None
+    age_hours: float | None = None
+    stale: bool = False
     error: str | None = None
+    last_attempt_at_utc: str | None = None
+
+
+class SourceInfo(SourceStatusInfo):
     points: list[ForecastPoint] = Field(default_factory=list)
 
 
 class SourcesPayload(BaseModel):
     metno: SourceInfo
     open_meteo: SourceInfo
+
+
+class SourceStatusPayload(BaseModel):
+    metno: SourceStatusInfo
+    open_meteo: SourceStatusInfo
 
 
 class SourcesResponse(BaseModel):

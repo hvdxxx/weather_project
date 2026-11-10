@@ -1,5 +1,7 @@
 import requests
 import pytest
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 import weather_api_config as config
 import weather_http
@@ -114,6 +116,40 @@ def test_retry_after_is_respected(monkeypatch, reset_http_state):
     assert fetch_json() == {"ok": True}
     assert calls["count"] == 2
     assert max(delays) >= 2.0
+
+
+def test_retry_after_accepts_http_date(monkeypatch, reset_http_state):
+    delays = reset_http_state
+    retry_at = datetime.now(timezone.utc) + timedelta(seconds=3)
+    calls = install_responses(
+        monkeypatch,
+        [
+            FakeResponse(
+                status_code=429,
+                headers={"Retry-After": format_datetime(retry_at, usegmt=True)},
+            ),
+            FakeResponse(payload={"ok": True}),
+        ],
+    )
+
+    assert fetch_json() == {"ok": True}
+    assert calls["count"] == 2
+    assert max(delays) >= 2.0
+
+
+def test_rate_limit_state_is_per_provider(reset_http_state, monkeypatch):
+    delays = reset_http_state
+    clock = [1000.0]
+    monkeypatch.setattr(weather_http.time, "monotonic", lambda: clock[0])
+
+    weather_http._throttle("provider-a")
+    clock[0] = 1000.1
+    weather_http._throttle("provider-b")
+    assert delays == []
+
+    clock[0] = 1000.2
+    weather_http._throttle("provider-a")
+    assert delays == [pytest.approx(0.8)]
 
 
 def test_client_error_is_not_retried(monkeypatch):

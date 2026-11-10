@@ -30,6 +30,78 @@ def _hour_floor(moment: datetime | None = None) -> str:
     )
 
 
+def _parse_utc(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def _age_hours(value: Any) -> float | None:
+    moment = _parse_utc(value)
+    if moment is None:
+        return None
+    return max(0.0, (datetime.now(timezone.utc) - moment).total_seconds() / 3600)
+
+
+def _source_status(provider: str, points: list[dict[str, Any]]) -> dict[str, Any]:
+    """Свежесть последнего снимка и результат последней попытки сбора."""
+    fetched_at = points[0].get("fetched_at_utc") if points else None
+    event = weather_db.load_latest_fetch_event(provider)
+
+    error = None
+    last_attempt_at = None
+    if event is not None:
+        last_attempt_at = event.get("ts_utc")
+        if event.get("status") == "error":
+            error = event.get("error") or "ошибка сбора прогноза"
+
+    age = _age_hours(fetched_at) if points else None
+    stale = bool(points) and (
+        age is None or age > config.FORECAST_MAX_AGE_HOURS
+    )
+
+    if not points:
+        status = "error" if error else "unavailable"
+    elif error:
+        status = "error"
+    elif stale:
+        status = "stale"
+    else:
+        status = "ok"
+
+    return {
+        "status": status,
+        "count": len(points),
+        "fetched_at_utc": fetched_at,
+        "age_hours": round(age, 2) if age is not None else None,
+        "stale": stale,
+        "error": error,
+        "last_attempt_at_utc": last_attempt_at,
+    }
+
+
+def _load_snapshots() -> dict[str, list[dict[str, Any]]]:
+    return {
+        provider: weather_db.load_latest_forecast(provider)
+        for provider in (METNO, OPEN_METEO)
+    }
+
+
+def _statuses_for(
+    snapshots: dict[str, list[dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        provider: _source_status(provider, snapshots[provider])
+        for provider in (METNO, OPEN_METEO)
+    }
+
+
 def collect_once(generate_plots: bool = False) -> dict[str, Any]:
     """Один цикл сбора двух прогнозов; источники работают независимо."""
     weather_db.init_db()
@@ -133,31 +205,39 @@ def get_history(limit: int = 100, since: datetime | None = None) -> list[dict[st
     return weather_db.load_observations(limit=limit, since_utc=since_utc)
 
 
+def get_forecast_data() -> dict[str, Any]:
+    """Строки сравнения, статусы источников и общий признак устаревания."""
+    snapshots = _load_snapshots()
+    statuses = _statuses_for(snapshots)
+
+    rows: list[dict[str, Any]] = []
+    if snapshots[METNO] or snapshots[OPEN_METEO]:
+        rows = build_combined_forecast(
+            snapshots[METNO],
+            snapshots[OPEN_METEO],
+            start_utc=_hour_floor(),
+        )
+
+    return {
+        "rows": rows,
+        "sources": statuses,
+        "stale": any(info["stale"] for info in statuses.values() if info["count"]),
+    }
+
+
 def get_forecast_rows() -> list[dict[str, Any]]:
     """Сравнение последних сохранённых прогнозов, начиная с текущего часа."""
-    metno_points = weather_db.load_latest_forecast(METNO)
-    open_meteo_points = weather_db.load_latest_forecast(OPEN_METEO)
-    if not metno_points and not open_meteo_points:
-        return []
-    return build_combined_forecast(
-        metno_points,
-        open_meteo_points,
-        start_utc=_hour_floor(),
-    )
+    return get_forecast_data()["rows"]
 
 
 def get_sources() -> dict[str, Any]:
-    """Последние снимки каждого источника с признаком доступности."""
+    """Последние снимки каждого источника с признаком доступности/свежести."""
+    snapshots = _load_snapshots()
     sources = {}
     for provider in (METNO, OPEN_METEO):
-        points = weather_db.load_latest_forecast(provider)
-        sources[provider] = {
-            "status": "ok" if points else "unavailable",
-            "count": len(points),
-            "fetched_at_utc": points[0].get("fetched_at_utc") if points else None,
-            "error": None,
-            "points": points,
-        }
+        info = _source_status(provider, snapshots[provider])
+        info["points"] = snapshots[provider]
+        sources[provider] = info
 
     return {
         "generated_at_utc": _utc_now(),
@@ -166,30 +246,62 @@ def get_sources() -> dict[str, Any]:
     }
 
 
-def get_combined_rows() -> list[dict[str, Any]]:
-    """Сохранённые объединённые прогнозы, начиная с текущего часа."""
+def get_combined_data() -> dict[str, Any]:
+    """Сохранённый combined-снимок, его время и статусы источников."""
     threshold = _hour_floor()
-    return [
+    rows = [
         row
         for row in weather_db.load_latest_combined()
         if row["ts_utc"] >= threshold
     ]
 
+    snapshots = _load_snapshots()
+    statuses = _statuses_for(snapshots)
+    generated_at = rows[0].get("generated_at_utc") if rows else None
+    combined_age = _age_hours(generated_at) if rows else None
+    stale = bool(rows) and (
+        combined_age is None
+        or combined_age > config.FORECAST_MAX_AGE_HOURS
+        or any(info["stale"] for info in statuses.values() if info["count"])
+    )
 
-def get_differences_rows() -> list[dict[str, Any]] | None:
-    """Расхождения по последним прогнозам; None — если прогнозов нет."""
-    rows = get_forecast_rows()
-    if not rows:
-        return None
-    return [
+    return {
+        "rows": rows,
+        "sources": statuses,
+        "stale": stale,
+        "generated_at_utc": generated_at,
+    }
+
+
+def get_combined_rows() -> list[dict[str, Any]]:
+    """Сохранённые объединённые прогнозы, начиная с текущего часа."""
+    return get_combined_data()["rows"]
+
+
+def get_differences_data() -> dict[str, Any]:
+    """Расхождения по последним прогнозам и метаданные свежести."""
+    data = get_forecast_data()
+    rows = [
         {
             "ts_utc": row["ts_utc"],
             "differences": row["differences"],
             "availability": row["availability"],
         }
-        for row in rows
+        for row in data["rows"]
         if row["differences"] is not None
     ]
+    return {
+        "available": bool(data["rows"]),
+        "rows": rows,
+        "sources": data["sources"],
+        "stale": data["stale"],
+    }
+
+
+def get_differences_rows() -> list[dict[str, Any]] | None:
+    """Расхождения по последним прогнозам; None — если прогнозов нет."""
+    data = get_differences_data()
+    return data["rows"] if data["available"] else None
 
 
 def get_statistics() -> dict[str, Any]:

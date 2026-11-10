@@ -117,3 +117,77 @@ def test_get_statistics_without_forecasts(isolated_db):
     assert stats["city"]
     assert stats["observations"] is None
     assert stats["forecast"]["matched"] == 0
+
+
+def old_ts(hours=5):
+    moment = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    return (moment - timedelta(hours=hours)).isoformat(timespec="seconds")
+
+
+def test_source_statuses_unavailable_without_data(isolated_db):
+    data = weather_service.get_forecast_data()
+
+    assert data["rows"] == []
+    assert data["stale"] is False
+    assert data["sources"]["metno"]["status"] == "unavailable"
+    assert data["sources"]["open_meteo"]["status"] == "unavailable"
+
+
+def test_source_status_is_stale_for_old_snapshot(isolated_db):
+    weather_db.insert_forecast_points(
+        "metno",
+        old_ts(),
+        [make_point(future_ts(), "metno", temperature=-10.0)],
+    )
+
+    data = weather_service.get_forecast_data()
+
+    assert len(data["rows"]) == 1
+    assert data["stale"] is True
+    metno = data["sources"]["metno"]
+    assert metno["status"] == "stale"
+    assert metno["stale"] is True
+    assert metno["age_hours"] >= 4.9
+
+
+def test_source_status_error_keeps_last_known_forecast(isolated_db):
+    weather_db.insert_forecast_points(
+        "metno",
+        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        [make_point(future_ts(), "metno", temperature=-10.0)],
+    )
+    weather_db.log_update(
+        "forecast_fetch",
+        {"provider": "metno", "status": "error", "error": "boom"},
+        level="warning",
+    )
+
+    data = weather_service.get_forecast_data()
+    metno = data["sources"]["metno"]
+
+    assert metno["status"] == "error"
+    assert metno["error"] == "boom"
+    assert metno["count"] == 1
+    assert data["stale"] is False
+    assert len(data["rows"]) == 1
+
+
+def test_source_error_and_stale_other(isolated_db):
+    weather_db.insert_forecast_points(
+        "metno",
+        old_ts(),
+        [make_point(future_ts(), "metno", temperature=-10.0)],
+    )
+    weather_db.log_update(
+        "forecast_fetch",
+        {"provider": "open_meteo", "status": "error", "error": "down"},
+        level="warning",
+    )
+
+    data = weather_service.get_forecast_data()
+
+    assert data["stale"] is True
+    assert data["sources"]["metno"]["status"] == "stale"
+    assert data["sources"]["open_meteo"]["status"] == "error"
+    assert data["sources"]["open_meteo"]["count"] == 0
+    assert len(data["rows"]) == 1

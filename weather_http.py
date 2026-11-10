@@ -10,6 +10,8 @@ import logging
 import random
 import threading
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import requests
@@ -32,7 +34,8 @@ _session = requests.Session()
 _sleep = time.sleep
 _cache: dict[tuple[str, tuple[tuple[str, str], ...]], tuple[float, dict[str, Any]]] = {}
 _cache_lock = threading.Lock()
-_rate_lock = threading.Lock()
+_rate_locks: dict[str, threading.Lock] = {}
+_rate_locks_guard = threading.Lock()
 _last_request_at: dict[str, float] = {}
 
 
@@ -40,8 +43,12 @@ def clear_cache() -> None:
     """Сбрасывает кэш и состояние rate limit (используется в тестах)."""
     with _cache_lock:
         _cache.clear()
-    with _rate_lock:
-        _last_request_at.clear()
+
+    with _rate_locks_guard:
+        locks = list(_rate_locks.values())
+        for lock in locks:
+            with lock:
+                _last_request_at.clear()
 
 
 def _cache_key(url: str, params: dict[str, Any] | None) -> tuple[str, tuple[tuple[str, str], ...]]:
@@ -78,9 +85,22 @@ def _put_cached(
         _cache[key] = (time.monotonic() + ttl_sec, copy.deepcopy(payload))
 
 
+def _get_rate_lock(provider: str) -> threading.Lock:
+    with _rate_locks_guard:
+        lock = _rate_locks.get(provider)
+        if lock is None:
+            lock = threading.Lock()
+            _rate_locks[provider] = lock
+        return lock
+
+
 def _throttle(provider: str) -> None:
-    """Не даёт обращаться к одному API чаще разрешённого интервала."""
-    with _rate_lock:
+    """Не даёт обращаться к одному API чаще разрешённого интервала.
+
+    Блокировка своя у каждого провайдера: ожидание MET Norway не задерживает
+    запрос к Open-Meteo.
+    """
+    with _get_rate_lock(provider):
         now = time.monotonic()
         last = _last_request_at.get(provider)
         if last is not None:
@@ -94,10 +114,21 @@ def _retry_after_seconds(response: requests.Response) -> float | None:
     raw = response.headers.get("Retry-After")
     if raw is None:
         return None
+
     try:
         return max(0.0, float(raw))
     except (TypeError, ValueError):
+        pass
+
+    try:
+        retry_at = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, OverflowError):
         return None
+    if retry_at is None:
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
 
 
 def _retry_delay(attempt: int, retry_after: float | None) -> float:

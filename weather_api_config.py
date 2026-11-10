@@ -31,34 +31,73 @@ def _load_dotenv(path: Path) -> None:
 _load_dotenv(BASE_DIR / ".env")
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name, "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name}: ожидается целое число, получено {raw!r}") from exc
+def _range_hint(minimum: float | None, maximum: float | None) -> str:
+    if minimum is not None and maximum is not None:
+        return f" в диапазоне {minimum}..{maximum}"
+    if minimum is not None:
+        return f" не меньше {minimum}"
+    if maximum is not None:
+        return f" не больше {maximum}"
+    return ""
 
 
-def _env_float(name: str, default: float) -> float:
+def _check_range(name: str, value: float, minimum: float | None, maximum: float | None) -> None:
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name}: значение {value} меньше минимума {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name}: значение {value} больше максимума {maximum}")
+
+
+def _env_int(
+    name: str,
+    default: int,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
     raw = os.getenv(name, "").strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name}: ожидается число, получено {raw!r}") from exc
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"{name}: ожидается целое число{_range_hint(minimum, maximum)}, получено {raw!r}"
+            ) from exc
+    else:
+        value = default
+
+    _check_range(name, value, minimum, maximum)
+    return value
+
+
+def _env_float(
+    name: str,
+    default: float,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    raw = os.getenv(name, "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"{name}: ожидается число{_range_hint(minimum, maximum)}, получено {raw!r}"
+            ) from exc
+    else:
+        value = default
+
+    _check_range(name, value, minimum, maximum)
+    return value
 
 
 # --- Место и время ---------------------------------------------------------
 CITY = os.getenv("WEATHER_CITY", "Yakutsk").strip() or "Yakutsk"
-LATI = _env_float("WEATHER_LAT", 62.01436)
-LONG = _env_float("WEATHER_LON", 129.7124)
+LATI = _env_float("WEATHER_LAT", 62.01436, -90.0, 90.0)
+LONG = _env_float("WEATHER_LON", 129.7124, -180.0, 180.0)
 TIMEZONE = os.getenv("WEATHER_TIMEZONE", "Asia/Yakutsk").strip() or "Asia/Yakutsk"
 
-INTERVAL_MIN = _env_int("WEATHER_INTERVAL_MIN", 30)
-PLOT_EVERY = _env_int("WEATHER_PLOT_EVERY", 5)
+INTERVAL_MIN = _env_int("WEATHER_INTERVAL_MIN", 30, 1, 1440)
+PLOT_EVERY = _env_int("WEATHER_PLOT_EVERY", 5, 1, 10000)
 
 # --- Хранилище -------------------------------------------------------------
 # SQLite — основное хранилище; CSV остаётся историческим источником.
@@ -68,7 +107,10 @@ if not DB_PATH.is_absolute():
     DB_PATH = BASE_DIR / DB_PATH
 
 # Наблюдение считается актуальным не дольше этого срока.
-CURRENT_MAX_AGE_HOURS = _env_int("WEATHER_CURRENT_MAX_AGE_HOURS", 6)
+CURRENT_MAX_AGE_HOURS = _env_int("WEATHER_CURRENT_MAX_AGE_HOURS", 6, 1, 168)
+
+# Прогноз старше этого срока помечается как stale, но не удаляется.
+FORECAST_MAX_AGE_HOURS = _env_int("WEATHER_FORECAST_MAX_AGE_HOURS", 3, 1, 72)
 
 PLOTS_DIR = Path(os.getenv("WEATHER_PLOTS_DIR", str(DATA_DIR / "plots")))
 if not PLOTS_DIR.is_absolute():
@@ -104,7 +146,7 @@ OPEN_METEO_HOURLY_PARAMS = (
 )
 
 # --- HTTP и кэш ------------------------------------------------------------
-TIMEOUT = _env_int("WEATHER_TIMEOUT_SEC", 15)
+TIMEOUT = _env_int("WEATHER_TIMEOUT_SEC", 15, 1, 120)
 HTTP_CONNECT_TIMEOUT = 5
 HTTP_READ_TIMEOUT = TIMEOUT
 HTTP_MAX_ATTEMPTS = 3

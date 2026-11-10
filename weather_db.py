@@ -305,6 +305,33 @@ def load_latest_forecast(provider: str) -> list[dict[str, Any]]:
     return points
 
 
+def load_latest_fetch_event(provider: str) -> dict[str, Any] | None:
+    """Последняя попытка сбора прогноза из update_log (без новой таблицы)."""
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT ts_utc, level, details FROM update_log
+            WHERE event = 'forecast_fetch'
+            ORDER BY id DESC LIMIT 50
+            """
+        ).fetchall()
+
+    for row in rows:
+        try:
+            details = json.loads(row["details"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        if details.get("provider") != provider:
+            continue
+        return {
+            "ts_utc": row["ts_utc"],
+            "level": row["level"],
+            "status": details.get("status"),
+            "error": details.get("error"),
+        }
+    return None
+
+
 def insert_combined_points(
     generated_at_utc: str,
     rows: Iterable[dict[str, Any]],

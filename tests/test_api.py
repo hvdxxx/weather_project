@@ -46,9 +46,9 @@ def seed_observation(ts_utc=None):
     )
 
 
-def seed_forecasts():
+def seed_forecasts(fetched_at=None):
     ts = future_ts()
-    fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    fetched_at = fetched_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
     metno = [
         make_point(
             ts,
@@ -191,9 +191,67 @@ def test_missing_statistics_are_still_200(client):
 
 
 def test_forecast_dependent_endpoints_require_data(client):
-    assert client.get("/weather/forecast/sources").status_code == 503
+    sources = client.get("/weather/forecast/sources")
+    assert sources.status_code == 200
+    assert sources.json()["sources"]["metno"]["status"] == "unavailable"
+    assert sources.json()["sources"]["open_meteo"]["status"] == "unavailable"
+
+    assert client.get("/weather/forecast").status_code == 503
     assert client.get("/weather/forecast/combined").status_code == 503
     assert client.get("/weather/forecast/differences").status_code == 503
+
+
+def test_stale_forecast_is_returned_with_marker(client):
+    old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(timespec="seconds")
+    seed_forecasts(fetched_at=old)
+
+    for path in (
+        "/weather/forecast",
+        "/weather/forecast/differences",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["stale"] is True
+        assert body["sources"]["metno"]["status"] == "stale"
+        assert body["sources"]["metno"]["age_hours"] >= 4.9
+
+    sources = client.get("/weather/forecast/sources")
+    assert sources.status_code == 200
+    assert sources.json()["sources"]["metno"]["status"] == "stale"
+
+
+def test_stale_combined_is_marked(client):
+    old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(timespec="seconds")
+    _, _, rows = seed_forecasts(fetched_at=old)
+    weather_db.insert_combined_points(old, rows)
+
+    response = client.get("/weather/forecast/combined")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stale"] is True
+    assert body["snapshot_generated_at_utc"] == old
+    assert body["sources"]["metno"]["status"] == "stale"
+
+
+def test_source_error_with_last_known_forecast_is_marked(client):
+    old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(timespec="seconds")
+    seed_forecasts(fetched_at=old)
+    weather_db.log_update(
+        "forecast_fetch",
+        {"provider": "open_meteo", "status": "error", "error": "timeout"},
+        level="warning",
+    )
+
+    response = client.get("/weather/forecast")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stale"] is True
+    assert body["sources"]["metno"]["status"] == "stale"
+    assert body["sources"]["open_meteo"]["status"] == "error"
+    assert body["sources"]["open_meteo"]["error"] == "timeout"
 
 
 def test_current_weather_rejects_stale_observation(client):
