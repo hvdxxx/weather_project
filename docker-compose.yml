@@ -1,0 +1,66 @@
+x-weather-env: &weather-env
+  WEATHER_CITY: "${WEATHER_CITY:-Yakutsk}"
+  WEATHER_LAT: "${WEATHER_LAT:-62.01436}"
+  WEATHER_LON: "${WEATHER_LON:-129.7124}"
+  WEATHER_TIMEZONE: "${WEATHER_TIMEZONE:-Asia/Yakutsk}"
+  WEATHER_CONTACT_EMAIL: "${WEATHER_CONTACT_EMAIL:-}"
+  WEATHER_INTERVAL_MIN: "${WEATHER_INTERVAL_MIN:-30}"
+  WEATHER_PLOT_EVERY: "${WEATHER_PLOT_EVERY:-5}"
+  WEATHER_TIMEOUT_SEC: "${WEATHER_TIMEOUT_SEC:-15}"
+  WEATHER_CURRENT_MAX_AGE_HOURS: "${WEATHER_CURRENT_MAX_AGE_HOURS:-6}"
+  WEATHER_DB_PATH: /app/data/weather.db
+  WEATHER_PLOTS_DIR: /app/data/plots
+
+services:
+  collector:
+    build: .
+    image: weather-collector:2.0
+    init: true
+    command: ["python", "main.py"]
+    environment: *weather-env
+    volumes:
+      - weather-data:/app/data
+    restart: unless-stopped
+    stop_grace_period: 20s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, sqlite3; db=sqlite3.connect(os.environ.get('WEATHER_DB_PATH', '/app/data/weather.db')); db.execute(\"SELECT value FROM meta WHERE key='schema_version'\").fetchone()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  api:
+    build: .
+    image: weather-collector:2.0
+    init: true
+    command: ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *weather-env
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - weather-data:/app/data
+    depends_on:
+      collector:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  weather-data:
